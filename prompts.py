@@ -1,22 +1,26 @@
-# SAP ERP RAG Pipeline — Prompts Skill File
-# ============================================
-# All prompts used in pipeline_v5.py are defined here.
-# Import and use in pipeline_v5.py via load_prompts().
-#
-# Author  : Rohit Kumar
-# Project : SAP ERP RAG Pipeline — Keva Fragrances Internship
+"""
+SAP ERP RAG Pipeline — Prompts
+================================
+All prompts used in pipeline_v5.py are defined here.
+Import in pipeline_v5.py via: from prompts import *
+
+Author  : Rohit Kumar
+Project : SAP ERP RAG Pipeline — Keva Fragrances Internship
+"""
 
 # ─── QUERY GENERATION PROMPT (Model 1) ───────────────────────────────────────
-# Sees: question + schema only — never sees actual data
-# Used in: node_generate_query
+# Used in : node_generate_query
+# Sees    : question + schema only — never sees actual SAP data
+# Purpose : Generate MongoDB aggregation pipeline for business question
 
 QUERY_GEN_PROMPT = """You are an expert SAP ERP database analyst with deep MongoDB knowledge.
-The SAP SD tables are available in the ERP system through MongoDB. You have direct MCP tool access to query these collections.
+The SAP SD tables are available in the ERP system through MongoDB MCP.
+You have direct access to query these collections.
 
 DATABASE SCHEMA (use ONLY these exact field names and collection names):
 {schema}
 
-TASK: Generate a MongoDB aggregation pipeline for the business question below.
+TASK: Generate a MongoDB Python query for the business question below.
 
 RULES:
 1. Use ONLY field names from schema above. Copy casing exactly.
@@ -95,8 +99,8 @@ Question: {question}"""
 
 
 # ─── ABAP QUERY PROMPT (Model 1) ──────────────────────────────────────────────
-# Used in: node_generate_query (parallel to QUERY_GEN_PROMPT)
-# Purpose: Generate equivalent SAP ABAP query for documentation
+# Used in : node_generate_query (parallel call alongside QUERY_GEN_PROMPT)
+# Purpose : Generate equivalent SAP ABAP query for documentation/reference
 
 ABAP_PROMPT = """You are a senior SAP ABAP developer. Generate an ABAP SELECT query.
 
@@ -117,8 +121,9 @@ Question: {question}
 ABAP Query:"""
 
 
-# ─── QUERY RETRY PROMPT (Model 1) ─────────────────────────────────────────────
-# Used in: node_execute (when query fails, retry up to 2x)
+# ─── RETRY PROMPT (Model 1) ───────────────────────────────────────────────────
+# Used in : node_execute (when query fails, retries up to 2x)
+# Purpose : Fix failed MongoDB query using error message + schema
 
 RETRY_PROMPT = """The MongoDB query failed.
 Error: {error}
@@ -137,8 +142,8 @@ result = ..."""
 
 
 # ─── SEMANTIC FORMAT PROMPT (Model 2) ─────────────────────────────────────────
-# Used in: node_format (semantic path — RAG context answer)
-# Model 2 sees actual SAP data here via RAG context
+# Used in : node_format — semantic path (RAG context answer)
+# Model 2 sees actual SAP records here via RAG retrieval
 
 SEMANTIC_FORMAT_PROMPT = """You are an SAP SD assistant. Answer using ONLY the records below.
 Currency: INR | Fiscal Year: Indian Apr-Mar
@@ -151,8 +156,8 @@ Answer:"""
 
 
 # ─── AGGREGATE FORMAT PROMPT (Model 2) ────────────────────────────────────────
-# Used in: node_format (aggregate path — formats MongoDB query results)
-# Model 2 sees actual query results here
+# Used in : node_format — aggregate path (formats MongoDB query results)
+# Model 2 sees actual query results here — formats for user presentation
 
 AGGREGATE_FORMAT_PROMPT = """You are presenting SAP query results.
 Present ONLY the rows below. Do not add, drop, round, rename or invent any value.
