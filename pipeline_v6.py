@@ -96,7 +96,6 @@ if USE_HF:
         hf_model_id,
         torch_dtype=torch.float16,
         device_map="auto",
-        load_in_4bit=True,
         token=hf_token
     )
     pipe = hf_pipeline(
