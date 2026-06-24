@@ -216,15 +216,33 @@ def node_mcp_query(state: AgentState) -> AgentState:
 
                 # Capture raw data from query — goes to Model 2, NOT back to Claude
                 if tool_name == "query_sap_collection":
-                    raw_data      = tool_result
-                    used_pipeline = tool_input
-                    intent        = "aggregate"
-                    # Check if result is empty
                     try:
                         parsed = json.loads(tool_result)
-                        exec_status = "data" if parsed else "empty"
+                        if not parsed:
+                            exec_status = "empty"
+                            raw_data    = ""
+                            intent      = "semantic"
+                        else:
+                            first    = parsed[0] if parsed else {}
+                            all_null = all(
+                                v is None or v == "" or str(v) == "None"
+                                for k, v in first.items()
+                                if k not in ["_id"]
+                            )
+                            if all_null:
+                                exec_status = "empty"
+                                raw_data    = ""
+                                intent      = "semantic"
+                            else:
+                                exec_status   = "data"
+                                raw_data      = tool_result
+                                used_pipeline = tool_input
+                                intent        = "aggregate"
                     except Exception:
-                        exec_status = "error" if "error" in tool_result.lower() else "data"
+                        exec_status   = "data"
+                        raw_data      = tool_result
+                        used_pipeline = tool_input
+                        intent        = "aggregate"
 
                 assistant_content.append({
                     "type": "tool_use", "id": block.id,
@@ -343,15 +361,21 @@ def node_rag_search(state: AgentState) -> AgentState:
     context = "\n\n---\n\n".join(r["text"] for r in fused)
 
     # Model 2 formats semantic answer
-    prompt = PromptTemplate(
-        template=SEMANTIC_FORMAT_PROMPT,
-        input_variables=["context", "question"]
+    # Claude formats semantic answers — prevents hallucination of names/data
+    sem_response = anthropic_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Answer using ONLY the SAP records below. "
+                f"If the answer is not in the records, say so honestly.\n\n"
+                f"SAP Records:\n{context[:2000]}\n\n"
+                f"Question: {question}\nAnswer:"
+            )
+        }]
     )
-    answer = (prompt | llm_2 | StrOutputParser()).invoke({
-        "context":  context,
-        "question": question
-    })
-    answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
+    answer = sem_response.content[0].text.strip()
     if not answer:
         answer = context
 
@@ -387,14 +411,21 @@ def node_assemble(state: AgentState) -> AgentState:
         pipeline_display = "No aggregation — semantic answer via RAG"
 
     # Generate ABAP query via Model 2 (documentation only)
-    abap_prompt = PromptTemplate(
-        template=ABAP_PROMPT,
-        input_variables=["question"]
+    # Claude generates ABAP — Model 2 hallucinates garbage ABAP
+    abap_response = anthropic_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Generate a concise SAP ABAP SELECT query for:\n{state['question']}\n\n"
+                f"Use tables: VBAK, VBAP, VBRK, VBRP, KNA1, MARA, MAKT, LIKP, LIPS\n"
+                f"Format: REPORT z_sap_query. SELECT ... INTO TABLE @DATA(lt_result)\n"
+                f"Return ONLY the ABAP code."
+            )
+        }]
     )
-    abap_query = (abap_prompt | llm_2 | StrOutputParser()).invoke({
-        "question": state["question"]
-    })
-    abap_query = re.sub(r'<think>.*?</think>', '', abap_query, flags=re.DOTALL).strip()
+    abap_query = abap_response.content[0].text.strip()
 
     tools_used = " -> ".join(tool_calls) if tool_calls else "RAG search"
     final = (

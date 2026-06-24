@@ -164,10 +164,11 @@ DATE RULES:
 - Indian FY: Apr 1 - Mar 31 (FY 2022-23 = 2022-04-01 to 2023-03-31)
 
 WORKFLOW (always follow this order):
-1. Call get_sap_schema ONCE to confirm exact field names and casing
-2. Call query_sap_collection with the aggregation pipeline as JSON
-3. Return ONLY the raw query results - do not format or explain
-4. If a required field does not exist in schema, return empty result"""
+1. Call get_sap_schema ONCE to confirm exact field names
+2. If the required field does NOT exist in the schema — stop immediately, call NO more tools, return empty
+3. ONLY call query_sap_collection if the exact field exists in schema
+4. NEVER invent field names — use ONLY fields visible in get_sap_schema output
+5. Do NOT call get_sap_schema more than once"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
