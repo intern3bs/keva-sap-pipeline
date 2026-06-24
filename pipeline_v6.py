@@ -80,7 +80,7 @@ if USE_HF:
     from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings
     from huggingface_hub import login
 
-    hf_model_id = os.getenv("LLM_MODEL_2", "meta-llama/Llama-3.1-8B-Instruct")
+    hf_model_id = os.getenv("LLM_MODEL_2", "microsoft/Phi-3-mini-4k-instruct")
     embed_id    = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     hf_token    = os.getenv("HF_TOKEN")
 
