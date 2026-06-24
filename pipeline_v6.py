@@ -81,7 +81,7 @@ if USE_HF:
     from huggingface_hub import login
 
     hf_model_id = os.getenv("LLM_MODEL_2", "microsoft/Phi-3-mini-4k-instruct")
-    embed_id    = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    embed_id    = os.getenv("EMBED_MODEL", "mixedbread-ai/mxbai-embed-large-v1")
     hf_token    = os.getenv("HF_TOKEN")
 
     if hf_token:
@@ -119,10 +119,10 @@ else:
             api_key=ANTHROPIC_KEY
         )
         embeddings  = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+            model_name="mixedbread-ai/mxbai-embed-large-v1"
         )
         model2_name = f"Claude Haiku ({os.getenv('CLAUDE_MODEL_2','claude-haiku-4-5')})"
-        embed_name  = "sentence-transformers/all-MiniLM-L6-v2 [CPU]"
+        embed_name  = "mixedbread-ai/mxbai-embed-large-v1"
     else:
         from langchain_ollama import OllamaEmbeddings, ChatOllama
         llm_2       = ChatOllama(model=MODEL_2, base_url=OLLAMA_URL, temperature=TEMPERATURE)
