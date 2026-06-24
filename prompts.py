@@ -164,7 +164,7 @@ DATE RULES:
 - Indian FY: Apr 1 - Mar 31 (FY 2022-23 = 2022-04-01 to 2023-03-31)
 
 WORKFLOW (always follow this order):
-1. Call get_sap_schema to confirm exact field names and casing
+1. Call get_sap_schema ONCE to confirm exact field names and casing
 2. Call query_sap_collection with the aggregation pipeline as JSON
 3. Return ONLY the raw query results - do not format or explain
 4. If a required field does not exist in schema, return empty result"""
