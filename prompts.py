@@ -154,6 +154,9 @@ COLLECTION ROUTING (follow strictly):
 - NEVER use VBRP for customer queries - it has no customer ID field
 - Sales Office queries: use VBAK (only collection with "Sales Office" field)
 - Join VBRP to VBRK: use "Billing Document" as the join key
+- LIKP/LIPS = delivery logistics only (weight, transport, dates) — NEVER use for sales/revenue/growth/performance questions
+- AREA_MGR exists in LIKP but represents delivery area, NOT sales performance — delivery weight is NOT a sales metric
+- For area manager SALES questions: honestly say sales data by area manager is not available in billing collections
 
 MARGIN FORMULA (provide as JSON in pipeline, in $project after $group):
 {{"$multiply": [{{"$divide": [{{"$subtract": ["$rev","$cost"]}},"$rev"]}},100]}}
