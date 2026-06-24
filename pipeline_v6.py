@@ -109,11 +109,26 @@ if USE_HF:
     embed_name  = f"{embed_id} [GPU]"
 
 else:
-    from langchain_ollama import OllamaEmbeddings, ChatOllama
-    llm_2       = ChatOllama(model=MODEL_2, base_url=OLLAMA_URL, temperature=TEMPERATURE)
-    embeddings  = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_URL)
-    model2_name = MODEL_2
-    embed_name  = EMBED_MODEL
+    USE_CLAUDE_M2 = os.getenv("USE_CLAUDE_MODEL2", "false").lower() == "true"
+    if USE_CLAUDE_M2:
+        from langchain_anthropic import ChatAnthropic
+        from langchain_huggingface import HuggingFaceEmbeddings
+        llm_2       = ChatAnthropic(
+            model=os.getenv("CLAUDE_MODEL_2", "claude-haiku-4-5"),
+            temperature=TEMPERATURE,
+            api_key=ANTHROPIC_KEY
+        )
+        embeddings  = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        model2_name = f"Claude Haiku ({os.getenv('CLAUDE_MODEL_2','claude-haiku-4-5')})"
+        embed_name  = "sentence-transformers/all-MiniLM-L6-v2 [CPU]"
+    else:
+        from langchain_ollama import OllamaEmbeddings, ChatOllama
+        llm_2       = ChatOllama(model=MODEL_2, base_url=OLLAMA_URL, temperature=TEMPERATURE)
+        embeddings  = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_URL)
+        model2_name = MODEL_2
+        embed_name  = EMBED_MODEL
 
 # ─── VECTOR DB ────────────────────────────────────────────────────────────────
 vectordb = Chroma(
