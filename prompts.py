@@ -184,7 +184,10 @@ WORKFLOW for aggregate questions only:
 5. Do NOT call get_sap_schema more than once
 6. FORBIDDEN: NEVER query LIKP or LIPS for sales/revenue/growth questions
    LIKP.AREA_MGR = delivery zone, NOT sales manager
-   LIKP.BTGEW = weight in KG, NOT revenue"""
+   LIKP.BTGEW = weight in KG, NOT revenue
+7. Do NOT add $limit stage unless question explicitly asks for "top N" or "N results"
+   For "find all" questions — return all matching documents, no limit"""
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════

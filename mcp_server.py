@@ -220,7 +220,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
         elif tool_name == "query_sap_collection":
             col      = tool_input["collection"]
             pipeline = tool_input["pipeline"]
-            limit    = int(tool_input.get("limit", 100))
+            limit    = int(tool_input.get("limit", 500))
             if col not in SCHEMA_CACHE:
                 return json.dumps({"error": f"Collection '{col}' not found"})
             rows = list(db[col].aggregate(pipeline))
