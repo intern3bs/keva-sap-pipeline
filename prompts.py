@@ -166,12 +166,25 @@ DATE RULES:
 - ONLY add date filters if question explicitly mentions a year or fiscal year
 - Indian FY: Apr 1 - Mar 31 (FY 2022-23 = 2022-04-01 to 2023-03-31)
 
-WORKFLOW (always follow this order):
+CLASSIFY the question before calling any tools:
+- aggregate: computation, ranking, filtering, grouping, totals, finding records by value
+  Examples: "top 5 customers", "find billing where tax > 10000", "average net value",
+            "which materials have margin < 20%", "list documents where X", "total revenue"
+- semantic: descriptive, asks about process/meaning, field truly does not exist
+  Examples: "what is SAP SD", "explain payment terms", "what does billing type mean"
+
+If aggregate: use MCP tools below.
+If semantic: stop immediately, call NO tools, return empty so RAG handles it.
+
+WORKFLOW for aggregate questions only:
 1. Call get_sap_schema ONCE to confirm exact field names
-2. If the required field does NOT exist in the schema — stop immediately, call NO more tools, return empty
+2. If the required field does NOT exist — stop immediately, return empty
 3. ONLY call query_sap_collection if the exact field exists in schema
 4. NEVER invent field names — use ONLY fields visible in get_sap_schema output
-5. Do NOT call get_sap_schema more than once"""
+5. Do NOT call get_sap_schema more than once
+6. FORBIDDEN: NEVER query LIKP or LIPS for sales/revenue/growth questions
+   LIKP.AREA_MGR = delivery zone, NOT sales manager
+   LIKP.BTGEW = weight in KG, NOT revenue"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════

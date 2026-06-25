@@ -106,13 +106,16 @@ MCP_TOOLS = [
         "name": "query_sap_collection",
         "description": (
             "Run a MongoDB aggregation pipeline on a SAP collection. "
-            "Use for grouping, ranking, totals, margins, growth, joins. "
+            "Use for grouping, ranking, totals, margins, growth, joins, filtering records. "
             "ROUTING: Customer queries -> VBRK ('Sold-To Party', 'Net Value' capital V). "
             "Product/margin queries -> VBRP ('Material', 'Net value' lowercase v, 'Cost'). "
             "Sales office -> VBAK ('Sales Office'). "
+            "Filter queries (find where X > Y) -> VBRK or VBRP with $match. "
             "Join VBRP<->VBRK on 'Billing Document'. "
             "Margin: ($project after $group) (rev-cost)/rev*100. Filter Cost>0 first. "
-            "Date filters only if question explicitly mentions a time period."
+            "Date filters only if question explicitly mentions a time period. "
+            "FORBIDDEN: NEVER query LIKP or LIPS for sales/revenue/growth questions. "
+            "LIKP.BTGEW = weight in KG not revenue. LIKP.AREA_MGR = delivery zone not sales manager."
         ),
         "input_schema": {
             "type": "object",
@@ -197,14 +200,22 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "error":     f"Collection '{col}' not found",
                     "available": list(SCHEMA_CACHE.keys())
                 })
-            info = SCHEMA_CACHE[col]
-            return json.dumps({
+            info   = SCHEMA_CACHE[col]
+            result = {
                 "collection":  col,
                 "total_docs":  info["count"],
                 "fields":      info["fields"],
                 "sample":      info["sample"],
                 "date_ranges": info["date_ranges"],
-            }, indent=2)
+            }
+            if col in ("LIKP", "LIPS"):
+                result["WARNING"] = (
+                    "LIKP/LIPS = delivery logistics only. "
+                    "BTGEW = weight in KG (NOT revenue). "
+                    "AREA_MGR = delivery zone label (NOT sales manager). "
+                    "Do NOT use for sales, revenue, or growth analysis."
+                )
+            return json.dumps(result, indent=2)
 
         elif tool_name == "query_sap_collection":
             col      = tool_input["collection"]
