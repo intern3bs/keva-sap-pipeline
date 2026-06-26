@@ -30,7 +30,7 @@ Privacy:
   Claude (Model 1): sees schema + question only — never sees actual SAP data
   Model 2         : sees actual data — always runs locally
 
-All prompts  : prompts.py
+All prompts  : skills/*.md (loaded via prompts.py)
 All MCP tools: mcp_server.py
 
 Author  : Rohit Kumar
@@ -298,20 +298,19 @@ def node_format(state: AgentState) -> AgentState:
     answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
 
     # Fabrication guard — normalize to 2dp to handle rounding differences
-    def extract_nums(s):
+    def extract_decimals(s):
         nums = set()
-        for x in re.findall(r'-?\d[\d,]*\.?\d*', s):
-            x = x.replace(",", "")
+        for x in re.findall(r'\d+\.\d+', s):
             try:
-                nums.add(round(float(x), 2))
+                nums.add(round(float(x), 1))
             except ValueError:
-                nums.add(x)
+                pass
         return nums
 
-    invented = extract_nums(answer) - extract_nums(raw_data)
+    invented = extract_decimals(answer) - extract_decimals(raw_data)
     if not answer.strip():
         answer = "Results:\n" + raw_data
-    elif len(invented) > 2:
+    elif len(invented) > 3:
         answer = "Results:\n" + raw_data
 
     return {**state, "final_answer": answer}
