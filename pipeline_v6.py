@@ -429,7 +429,7 @@ def node_assemble(state: AgentState) -> AgentState:
     tools_used = " -> ".join(tool_calls) if tool_calls else "RAG search"
     final = (
         f"{answer}\n\n"
-        f"---\n"
+        f"<<<SPLIT>>>\n"
         f"MCP Tools: {tools_used}\n\n"
         f"MongoDB Query:\n```python\n{pipeline_display}\n```\n\n"
         f"ABAP Query:\n{abap_query}"
