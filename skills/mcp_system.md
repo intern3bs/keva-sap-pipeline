@@ -42,8 +42,8 @@ FORBIDDEN collections for sales/revenue questions:
 STEP 3 — PIPELINE RULES:
 
 Margin formula — ONLY in $project after $group, never in $group:
-  {"$multiply": [{"$divide": [{"$subtract": ["$rev","$cost"]},"$rev"]},100]}
-  Always add {"$match": {"Cost": {"$gt": 0}}} BEFORE grouping.
+  {{"$multiply": [{{"$divide": [{{"$subtract": ["$rev","$cost"]}},"$rev"]}},100]}}
+  Always add {{"$match": {{"Cost": {{"$gt": 0}}}}}} BEFORE grouping.
 
 Date filters — ONLY if question explicitly mentions a year or fiscal year.
   Indian FY: Apr 1 – Mar 31. FY 2022-23 = 2022-04-01 to 2023-03-31.
@@ -62,49 +62,49 @@ EXAMPLES of correct pipelines:
 
 # Top 5 customers by billing value → VBRK, $group + $sort + $limit 5
 [
-  {"$group": {"_id": "$Sold-To Party", "total": {"$sum": "$Net Value"}}},
-  {"$sort": {"total": -1}},
-  {"$limit": 5}
+  {{"$group": {{"_id": "$Sold-To Party", "total": {{"$sum": "$Net Value"}}}}}},
+  {{"$sort": {{"total": -1}}}},
+  {{"$limit": 5}}
 ]
 
 # Find all billing documents where tax > 10000 → VBRK, $match only, NO $limit
 [
-  {"$match": {"Tax amount": {"$gt": 10000}}},
-  {"$sort": {"Tax amount": -1}}
+  {{"$match": {{"Tax amount": {{"$gt": 10000}}}}}},
+  {{"$sort": {{"Tax amount": -1}}}}
 ]
 
 # Average net value per billing document → VBRK, $group with null _id
 [
-  {"$group": {"_id": null, "avg_net_value": {"$avg": "$Net Value"}, "count": {"$sum": 1}}},
-  {"$project": {"_id": 0, "avg_net_value": {"$round": ["$avg_net_value", 2]}, "count": 1}}
+  {{"$group": {{"_id": null, "avg_net_value": {{"$avg": "$Net Value"}}, "count": {{"$sum": 1}}}}}},
+  {{"$project": {{"_id": 0, "avg_net_value": {{"$round": ["$avg_net_value", 2]}}, "count": 1}}}}
 ]
 
 # Product margins → VBRP, $match Cost>0 first, margin in $project NOT $group
 [
-  {"$match": {"Cost": {"$gt": 0}}},
-  {"$group": {"_id": "$Material", "rev": {"$sum": "$Net value"}, "cost": {"$sum": "$Cost"}}},
-  {"$project": {"margin_pct": {"$multiply": [{"$divide": [{"$subtract": ["$rev","$cost"]},"$rev"]},100]}}},
-  {"$sort": {"margin_pct": 1}},
-  {"$limit": 3}
+  {{"$match": {{"Cost": {{"$gt": 0}}}}}},
+  {{"$group": {{"_id": "$Material", "rev": {{"$sum": "$Net value"}}, "cost": {{"$sum": "$Cost"}}}}}},
+  {{"$project": {{"margin_pct": {{"$multiply": [{{"$divide": [{{"$subtract": ["$rev","$cost"]}},"$rev"]}},100]}}}}}},
+  {{"$sort": {{"margin_pct": 1}}}},
+  {{"$limit": 3}}
 ]
 
 # Total billing value per Sales Organization → VBRK
 [
-  {"$group": {"_id": "$Sales Organization", "total": {"$sum": "$Net Value"}}},
-  {"$sort": {"total": -1}}
+  {{"$group": {{"_id": "$Sales Organization", "total": {{"$sum": "$Net Value"}}}}}},
+  {{"$sort": {{"total": -1}}}}
 ]
 
 # Find billing documents for specific Sales Org → VBRK, $match filter, NO $limit
 [
-  {"$match": {"Sales Organization": "1000"}},
-  {"$sort": {"Net Value": -1}}
+  {{"$match": {{"Sales Organization": "1000"}}}},
+  {{"$sort": {{"Net Value": -1}}}}
 ]
 
 # Join VBRP to VBRK — distinct materials per customer
 [
-  {"$lookup": {"from": "VBRK", "localField": "Billing Document", "foreignField": "Billing Document", "as": "header"}},
-  {"$unwind": "$header"},
-  {"$group": {"_id": "$header.Sold-To Party", "distinct_materials": {"$addToSet": "$Material"}}},
-  {"$project": {"customer": "$_id", "material_count": {"$size": "$distinct_materials"}, "_id": 0}},
-  {"$sort": {"material_count": -1}}
+  {{"$lookup": {{"from": "VBRK", "localField": "Billing Document", "foreignField": "Billing Document", "as": "header"}}}},
+  {{"$unwind": "$header"}},
+  {{"$group": {{"_id": "$header.Sold-To Party", "distinct_materials": {{"$addToSet": "$Material"}}}}}},
+  {{"$project": {{"customer": "$_id", "material_count": {{"$size": "$distinct_materials"}}, "_id": 0}}}},
+  {{"$sort": {{"material_count": -1}}}}
 ]
