@@ -8,9 +8,9 @@ Usage:
 import os
 import csv
 import re
-from pipeline_v5 import query_sap, MODEL_1, MODEL_2
-from pipeline_v5 import USE_CLAUDE
-
+from pipeline_v6 import query_sap, CLAUDE_MODEL, model2_name, USE_CLAUDE, DB_NAME
+MODEL_1 = CLAUDE_MODEL
+MODEL_2 = model2_name
 
 questions = [
     # ── Original 6 benchmark questions ───────────────────────────────────────
@@ -61,9 +61,9 @@ questions = [
 model1_label = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6") if USE_CLAUDE else MODEL_1
 model2_label = MODEL_2
 model_label  = f"{model1_label}+{model2_label}".replace(":", "_")
-output_file  = f"benchmark_v5_{model_label}.csv"
+output_file  = f"benchmark_v6_{model_label}.csv"
 
-print(f"Pipeline : pipeline_v5")
+print(f"Pipeline : pipeline_v6")
 print(f"Model    : {MODEL_1}")
 print(f"Output   : {output_file}")
 print(f"Total Qs : {len(questions)}\n")
