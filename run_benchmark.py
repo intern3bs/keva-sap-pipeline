@@ -1,13 +1,18 @@
 """
-SAP Pipeline Benchmark Runner
-Runs all benchmark questions across tiers and saves to CSV.
+SAP Pipeline Benchmark Runner — with checkpoint saving
+Saves progress every 10 questions so Colab disconnection doesn't lose work.
 
 Usage:
   python run_benchmark.py
+  python run_benchmark.py --resume   # resume from checkpoint
 """
 import os
 import csv
 import re
+import json
+import sys
+import time
+
 from pipeline_v6 import query_sap, CLAUDE_MODEL, model2_name, USE_CLAUDE, DB_NAME
 MODEL_1 = CLAUDE_MODEL
 MODEL_2 = model2_name
@@ -58,27 +63,50 @@ questions = [
     ("Tier7", "What is the profit by sales representative?"),
 ]
 
-model1_label = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6") if USE_CLAUDE else MODEL_1
-model2_label = MODEL_2
-model_label  = f"{model1_label}+{model2_label}".replace(":", "_")
-output_file  = f"benchmark_v6_{model_label}.csv"
+# ─── CONFIG ───────────────────────────────────────────────────────────────────
+CHECKPOINT_EVERY = 10   # save every N questions
+model1_label  = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6") if USE_CLAUDE else MODEL_1
+model2_label  = MODEL_2
+model_label   = f"{model1_label}+{model2_label}".replace(":", "_").replace("/", "-").replace(" ", "_")
+output_file   = f"benchmark_v6_{model_label}.csv"
+checkpoint_file = f"benchmark_v6_{model_label}_checkpoint.json"
 
-print(f"Pipeline : pipeline_v6")
-print(f"Model    : {MODEL_1}")
-print(f"Output   : {output_file}")
-print(f"Total Qs : {len(questions)}\n")
+print(f"Pipeline  : pipeline_v6")
+print(f"Model 1   : {model1_label}")
+print(f"Model 2   : {model2_label}")
+print(f"Output    : {output_file}")
+print(f"Checkpoint: {checkpoint_file}")
+print(f"Total Qs  : {len(questions)}")
 print("=" * 65)
 
+# ─── LOAD CHECKPOINT if resuming ──────────────────────────────────────────────
+resume = "--resume" in sys.argv
 rows = []
-for i, (tier, q) in enumerate(questions, 1):
-    print(f"[{tier}] Q{i}: {q}")
+start_from = 0
+
+if resume and os.path.exists(checkpoint_file):
+    with open(checkpoint_file) as f:
+        checkpoint = json.load(f)
+    rows = checkpoint["rows"]
+    start_from = checkpoint["completed"]
+    print(f"Resuming from question {start_from + 1} ({len(rows)} already done)\n")
+else:
+    print(f"Starting fresh\n")
+
+# ─── RUN QUESTIONS ────────────────────────────────────────────────────────────
+for i, (tier, q) in enumerate(questions[start_from:], start=start_from + 1):
+    print(f"[{tier}] Q{i}/{len(questions)}: {q[:70]}")
+    t0 = time.time()
+
     try:
         result = query_sap(q)
     except Exception as e:
         result = f"ERROR: {e}"
 
-    # parse answer, mongodb query, abap query
-    parts       = result.split("---")
+    elapsed = time.time() - t0
+
+    # Parse answer, mongodb query, abap query
+    parts       = result.split("<<<SPLIT>>>")
     answer      = parts[0].strip() if parts else result
     mongo_query = ""
     abap_query  = ""
@@ -102,17 +130,32 @@ for i, (tier, q) in enumerate(questions, 1):
         "Response":      answer,
         "MongoDB_Query": mongo_query,
         "ABAP_Query":    abap_query,
+        "Time_s":        round(elapsed, 1),
     })
-    print(f"  ✅ Done\n")
+    print(f"  ✅ Done in {elapsed:.1f}s\n")
 
+    # ── Checkpoint save every N questions ─────────────────────────────────────
+    if i % CHECKPOINT_EVERY == 0 or i == len(questions):
+        with open(checkpoint_file, "w") as f:
+            json.dump({"completed": i, "rows": rows}, f)
+        print(f"  💾 Checkpoint saved ({i}/{len(questions)} done)\n")
+
+# ─── SAVE FINAL CSV ───────────────────────────────────────────────────────────
 with open(output_file, "w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(
         f,
-        fieldnames=["Tier", "Question", "Model_1", "Model_2", "Response", "MongoDB_Query", "ABAP_Query"]
+        fieldnames=["Tier", "Question", "Model_1", "Model_2",
+                    "Response", "MongoDB_Query", "ABAP_Query", "Time_s"]
     )
     writer.writeheader()
     writer.writerows(rows)
 
+# Clean up checkpoint
+if os.path.exists(checkpoint_file):
+    os.remove(checkpoint_file)
+    print("  🗑️  Checkpoint cleaned up")
+
 print("=" * 65)
-print(f"Saved to {output_file}")
-print(f"Total questions answered: {len(rows)}")
+print(f"✅ Saved to {output_file}")
+print(f"   Total questions: {len(rows)}")
+print(f"   Avg time/q: {sum(r['Time_s'] for r in rows)/len(rows):.1f}s")
