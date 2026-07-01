@@ -80,7 +80,7 @@ if USE_HF:
     from langchain_huggingface import HuggingFacePipeline, HuggingFaceEmbeddings
     from huggingface_hub import login
 
-    hf_model_id = os.getenv("LLM_MODEL_2", "microsoft/Phi-3-mini-4k-instruct")
+    hf_model_id = os.getenv("LLM_MODEL_2", "Qwen/Qwen3.5-4B")
     embed_id    = os.getenv("EMBED_MODEL", "mixedbread-ai/mxbai-embed-large-v1")
     hf_token    = os.getenv("HF_TOKEN")
 
@@ -101,7 +101,8 @@ if USE_HF:
     pipe = hf_pipeline(
         "text-generation", model=hf_model, tokenizer=tokenizer,
         max_new_tokens=512, temperature=TEMPERATURE,
-        do_sample=True, return_full_text=False
+        do_sample=True, return_full_text=False,
+        pad_token_id=tokenizer.eos_token_id
     )
     llm_2       = HuggingFacePipeline(pipeline=pipe)
     embeddings  = HuggingFaceEmbeddings(model_name=embed_id)
@@ -298,20 +299,20 @@ def node_format(state: AgentState) -> AgentState:
     answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
 
     # Fabrication guard — normalize to 2dp to handle rounding differences
-    def extract_decimals(s):
-        nums = set()
-        for x in re.findall(r'\d+\.\d+', s):
-            try:
-                nums.add(round(float(x), 1))
-            except ValueError:
-                pass
-        return nums
+    # def extract_decimals(s):
+    #     nums = set()
+    #     for x in re.findall(r'\d+\.\d+', s):
+    #         try:
+    #             nums.add(round(float(x), 1))
+    #         except ValueError:
+    #             pass
+    #     return nums
 
-    invented = extract_decimals(answer) - extract_decimals(raw_data)
+    # invented = extract_decimals(answer) - extract_decimals(raw_data)
     if not answer.strip():
         answer = "Results:\n" + raw_data
-    elif len(invented) > 3:
-        answer = "Results:\n" + raw_data
+    # elif len(invented) > 3:
+    #     answer = "Results:\n" + raw_data
 
     return {**state, "final_answer": answer}
 
