@@ -52,11 +52,16 @@ $limit — ONLY add if question says "top N" or "N results".
   "Find all", "list all", "which documents" = NO $limit, return everything.
 
 STEP 4 — WORKFLOW:
-1. Call get_sap_schema ONCE — confirm exact field names before querying
+1. Call get_sap_schema ONCE — confirm exact field names AND check date_ranges
 2. If field does not exist → stop, return empty, let RAG handle it
-3. Call query_sap_collection with correct JSON pipeline
-4. Never call get_sap_schema more than once per question
-5. Never invent field names — only use fields from get_sap_schema output
+3. DATE VALIDATION — check date_ranges from schema before querying:
+   - If question asks for dates/FY outside the available date_ranges → stop immediately
+   - Say honestly: "This data is not available. The dataset covers [min_date] to [max_date] only."
+   - NEVER query for dates outside the range shown in get_sap_schema date_ranges
+   - NEVER return partial or wrong data for unavailable date ranges
+4. ONLY call query_sap_collection if both field exists AND dates are in range
+5. Never call get_sap_schema more than once per question
+6. Never invent field names — only use fields from get_sap_schema output
 
 EXAMPLES of correct pipelines:
 
