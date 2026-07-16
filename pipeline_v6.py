@@ -51,7 +51,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
 # ─── IMPORTS FROM SIBLING FILES ───────────────────────────────────────────────
-from mcp_server import execute_tool, MCP_TOOLS, SCHEMA_CACHE, db
+from mcp_server_qvd import execute_tool, MCP_TOOLS, SCHEMA_CACHE, db
 from prompts import (
     MCP_SYSTEM_PROMPT,
     ABAP_PROMPT,
