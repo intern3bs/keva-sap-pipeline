@@ -22,10 +22,12 @@ import os
 import re
 import json
 import asyncio
+from altair import sample
+from altair import sample
 import pandas as pd
 import pyqvd
 from dotenv import load_dotenv
-
+from collections import OrderedDict
 load_dotenv()
 
 QVD_DIR = os.getenv("QVD_DIR", "./qvd_files")
@@ -34,10 +36,14 @@ DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}')
 # ─── LOAD QVD FILES AT STARTUP ────────────────────────────────────────────────
 print(f"[QVD] Loading QVD files from: {QVD_DIR}", flush=True)
 
-QVD_CACHE   = {}   # col_name → pandas DataFrame
-SCHEMA_CACHE = {}  # col_name → schema info (same format as mcp_server.py)
+MAX_CACHED_COLLECTIONS = int(os.getenv("QVD_MAX_CACHE", "5"))
+QVD_CACHE    = OrderedDict()  # LRU cache — evicts least recently used
+SCHEMA_CACHE = {}             # schema index always kept (tiny)
 
-def _load_qvd_files():
+QVD_FILES = {}  # col_name → file path (index only, no data loaded)
+
+def _scan_qvd_files():
+    """Scan QVD directory and build index — does NOT load data."""
     if not os.path.isdir(QVD_DIR):
         print(f"[QVD] ⚠️  Directory not found: {QVD_DIR}", flush=True)
         return
@@ -45,47 +51,89 @@ def _load_qvd_files():
     for fname in sorted(os.listdir(QVD_DIR)):
         if not fname.lower().endswith(".qvd"):
             continue
+        col = os.path.splitext(fname)[0]
+        QVD_FILES[col] = os.path.join(QVD_DIR, fname)
+        print(f"[QVD] 📋 Found: {col} ({os.path.getsize(QVD_FILES[col])/1024:.1f} KB)", flush=True)
 
-        col  = os.path.splitext(fname)[0]
-        path = os.path.join(QVD_DIR, fname)
+    print(f"[QVD] Index built: {list(QVD_FILES.keys())} — loading on demand", flush=True)
 
+def _load_collection(col: str) -> bool:
+    """Load a single QVD file into QVD_CACHE and SCHEMA_CACHE on demand."""
+    if col in QVD_CACHE:
+        return True  # already loaded
+
+    if col not in QVD_FILES:
+        return False  # file doesn't exist
+
+    path = QVD_FILES[col]
+    try:
+        print(f"[QVD] Loading {col} from {path}...", flush=True)
+        table = pyqvd.QvdTable.from_qvd(path)
+        df    = table.to_pandas()
+        df    = df.replace("", None)
+        QVD_CACHE[col] = df
+        QVD_CACHE.move_to_end(col)  # mark as recently used
+
+        # Evict oldest if over limit
+        while len(QVD_CACHE) > MAX_CACHED_COLLECTIONS:
+            evicted = next(iter(QVD_CACHE))
+            del QVD_CACHE[evicted]
+            print(f"[QVD] ♻️  Evicted {evicted} from cache (limit={MAX_CACHED_COLLECTIONS})", flush=True)
+
+        sample_row = df.iloc[0].dropna().to_dict() if not df.empty else {}
+        fields     = list(df.columns)
+
+        date_ranges = {}
+        for k, v in sample_row.items():
+            if isinstance(v, str) and DATE_RE.match(str(v)):
+                non_null = df[k].dropna()
+                if not non_null.empty:
+                    date_ranges[k] = {
+                        "min": str(non_null.min()),
+                        "max": str(non_null.max())
+                    }
+
+# Get real row count efficiently
+        full_table = pyqvd.QvdTable.from_qvd(path)
+        row_count  = full_table.shape[0]
+
+        SCHEMA_CACHE[col] = {
+            "fields":      fields,
+            "sample":      {k: str(v)[:80] for k, v in sample_row.items()},
+            "date_ranges": date_ranges,
+            "count":       row_count,
+        }
+        print(f"[QVD] ✅ Loaded {col}: {len(df)} rows × {len(fields)} cols", flush=True)
+        return True
+
+    except Exception as e:
+        print(f"[QVD] ❌ Failed to load {col}: {e}", flush=True)
+        return False
+
+_scan_qvd_files()
+
+def _build_schema_index():
+    """Build schema info for all collections without loading full data."""
+    for col, path in QVD_FILES.items():
+        if col in SCHEMA_CACHE:
+            continue
         try:
+            # Read only first row for schema
             table = pyqvd.QvdTable.from_qvd(path)
-            df    = table.to_pandas()
-
-            # Clean empty strings → None for consistency
-            df = df.replace("", None)
-
-            QVD_CACHE[col] = df
-
-            # Build schema info — same structure as mcp_server.py SCHEMA_CACHE
-            sample_row = df.iloc[0].dropna().to_dict() if not df.empty else {}
-            fields     = list(df.columns)
-
-            date_ranges = {}
-            for k, v in sample_row.items():
-                if isinstance(v, str) and DATE_RE.match(str(v)):
-                    non_null = df[k].dropna()
-                    if not non_null.empty:
-                        date_ranges[k] = {
-                            "min": str(non_null.min()),
-                            "max": str(non_null.max())
-                        }
+            df_head = table.to_pandas().head(1)
+            fields  = list(df_head.columns)
+            sample  = df_head.iloc[0].dropna().to_dict() if not df_head.empty else {}
 
             SCHEMA_CACHE[col] = {
                 "fields":      fields,
-                "sample":      {k: str(v)[:80] for k, v in sample_row.items()},
-                "date_ranges": date_ranges,
-                "count":       len(df),
+                "sample":      {k: str(v)[:80] for k, v in sample.items()},
+                "date_ranges": {},  # will fill on first real load
+                "count":       -1,  # unknown until loaded
             }
-
-            print(f"[QVD] ✅ {col}: {len(df)} rows × {len(fields)} cols", flush=True)
-
         except Exception as e:
-            print(f"[QVD] ❌ {fname}: {e}", flush=True)
+            print(f"[QVD] ⚠️  Schema preview failed for {col}: {e}", flush=True)
 
-_load_qvd_files()
-print(f"[QVD] Loaded: {list(QVD_CACHE.keys())}", flush=True)
+_build_schema_index()
 
 
 # ─── PANDAS AGGREGATION ENGINE ─────────────────────────────────────────────────
@@ -446,6 +494,11 @@ MCP_TOOLS = [
             },
             "required": ["collection"]
         }
+    },
+    {
+        "name": "cache_status",
+        "description": "Show which collections are currently loaded in memory.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
     }
 ]
 
@@ -486,8 +539,12 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             pipeline = tool_input["pipeline"]
             limit    = int(tool_input.get("limit", 500))
 
+            # Lazy load — only load this collection if not already in cache
             if col not in QVD_CACHE:
-                return json.dumps({"error": f"Collection '{col}' not found"})
+                if not _load_collection(col):
+                    return json.dumps({"error": f"Collection '{col}' not found"})
+                else:
+                    QVD_CACHE.move_to_end(col)
 
             df   = QVD_CACHE[col].copy()
             rows = _apply_pipeline(df, pipeline)
@@ -509,7 +566,8 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             limit  = int(tool_input.get("limit", 10))
 
             if col not in QVD_CACHE:
-                return json.dumps({"error": f"Collection '{col}' not found"})
+                if not _load_collection(col):
+                    return json.dumps({"error": f"Collection '{col}' not found"})
 
             df = QVD_CACHE[col].copy()
             if filt:
@@ -519,7 +577,14 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
             rows = df.head(limit).where(pd.notna(df), None).to_dict("records")
             return json.dumps(rows, indent=2, default=str)
-
+        elif tool_name == "cache_status":
+            status = {
+                "loaded":     list(QVD_CACHE.keys()),
+                "available":  list(QVD_FILES.keys()),
+                "not_loaded": [c for c in QVD_FILES if c not in QVD_CACHE],
+                "max_cache":  MAX_CACHED_COLLECTIONS,
+            }
+            return json.dumps(status, indent=2)
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
