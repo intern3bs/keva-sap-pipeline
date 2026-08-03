@@ -261,6 +261,106 @@ def node_mcp_query(state: AgentState) -> AgentState:
             messages.append({"role": "user", "content": tool_results})
             continue
         break
+        # ── AUTO-ENRICHMENT ───────────────────────────────────────────────────────
+    # If results contain customer IDs (Sold-To Party) → join KNA1 for name
+    # If results contain Material → join MAKT for description
+    # This runs automatically for ALL questions, not just specific ones
+    if raw_data and intent == "aggregate":
+        try:
+            parsed = json.loads(raw_data)
+            if parsed and isinstance(parsed[0], dict):
+                first = parsed[0]
+
+                # ── Customer name enrichment ──────────────────────────────────
+                customer_fields = [k for k in first.keys()
+                                   if any(x in k.lower() for x in
+                                          ['sold-to', 'customer', 'party', 'kunnr'])]
+                if customer_fields:
+                    # Load KNA1 if not cached
+                    try:
+                        if USE_HF:
+                            from mcp_server_qvd import _load_collection, QVD_CACHE
+                            _load_collection('KNA1')
+                            kna1_df = QVD_CACHE.get('KNA1')
+                        else:
+                            kna1_docs = list(db['KNA1'].find({}, {'_id': 0}))
+                            import pandas as pd
+                            kna1_df = pd.DataFrame(kna1_docs)
+                    except Exception:
+                        kna1_df = None
+
+                    if kna1_df is not None:
+                        # Find the customer ID field in KNA1
+                        kna1_id_field = next(
+                            (c for c in kna1_df.columns
+                             if c.lower() in ['customer', 'kunnr', 'cust.']),
+                            None
+                        )
+                        kna1_name_field = next(
+                            (c for c in kna1_df.columns
+                             if 'name 1' in c.lower() or c == 'Name 1'),
+                            None
+                        )
+
+                        if kna1_id_field and kna1_name_field:
+                            # Build lookup dict: customer_id → name
+                            name_map = dict(zip(
+                                kna1_df[kna1_id_field].astype(str),
+                                kna1_df[kna1_name_field].astype(str)
+                            ))
+                            # Enrich each row
+                            for row in parsed:
+                                for cf in customer_fields:
+                                    cid = str(row.get(cf, ''))
+                                    if cid and cid in name_map:
+                                        row['Customer Name'] = name_map[cid]
+                                        break
+
+                # ── Material description enrichment ───────────────────────────
+                material_fields = [k for k in first.keys()
+                                   if any(x in k.lower() for x in
+                                          ['material', 'matnr', 'product'])]
+                if material_fields:
+                    try:
+                        if USE_HF:
+                            from mcp_server_qvd import _load_collection, QVD_CACHE
+                            _load_collection('MAKT')
+                            makt_df = QVD_CACHE.get('MAKT')
+                        else:
+                            makt_docs = list(db['MAKT'].find({}, {'_id': 0}))
+                            import pandas as pd
+                            makt_df = pd.DataFrame(makt_docs)
+                    except Exception:
+                        makt_df = None
+
+                    if makt_df is not None:
+                        makt_id_field = next(
+                            (c for c in makt_df.columns
+                             if c.lower() in ['material', 'matnr']),
+                            None
+                        )
+                        makt_desc_field = next(
+                            (c for c in makt_df.columns
+                             if 'desc' in c.lower() or 'maktx' in c.lower()
+                             or 'material description' in c.lower()),
+                            None
+                        )
+                        if makt_id_field and makt_desc_field:
+                            desc_map = dict(zip(
+                                makt_df[makt_id_field].astype(str),
+                                makt_df[makt_desc_field].astype(str)
+                            ))
+                            for row in parsed:
+                                for mf in material_fields:
+                                    mid = str(row.get(mf, ''))
+                                    if mid and mid in desc_map:
+                                        row['Material Description'] = desc_map[mid]
+                                        break
+
+                raw_data = json.dumps(parsed, indent=2, default=str)
+
+        except Exception:
+            pass  # enrichment is best-effort, never breaks pipeline
 
     # If no data returned — route to semantic/RAG
     if not raw_data:
