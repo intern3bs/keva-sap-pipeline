@@ -263,6 +263,8 @@ def node_mcp_query(state: AgentState) -> AgentState:
         break
 # ── AUTO-ENRICHMENT (generalized, value-based join detection) ──────────────
     def _norm_id(v):
+        if isinstance(v, (list, tuple)):
+            v = v[0] if len(v) == 1 else v
         s = str(v).strip()
         if s.endswith('.0'):
             s = s[:-2]
