@@ -51,7 +51,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
 # ─── IMPORTS FROM SIBLING FILES ───────────────────────────────────────────────
-from mcp_server_qvd import execute_tool, MCP_TOOLS, SCHEMA_CACHE, db
+from mcp_server_qvd import execute_tool, MCP_TOOLS, SCHEMA_CACHE, db, _load_collection, QVD_CACHE
 from prompts import (
     MCP_SYSTEM_PROMPT,
     ABAP_PROMPT,
@@ -261,94 +261,80 @@ def node_mcp_query(state: AgentState) -> AgentState:
             messages.append({"role": "user", "content": tool_results})
             continue
         break
-        # ── AUTO-ENRICHMENT ───────────────────────────────────────────────────────
-    # If results contain customer IDs (Sold-To Party) → join KNA1 for name
-    # If results contain Material → join MAKT for description
-    # This runs automatically for ALL questions, not just specific ones
+# ── AUTO-ENRICHMENT (generalized, value-based join detection) ──────────────
+    def _norm_id(v):
+        s = str(v).strip()
+        if s.endswith('.0'):
+            s = s[:-2]
+        return s
+
+    def _find_join_column(rows, ref_df, ref_id_col, min_match_ratio=0.5):
+        """Find which column in `rows` best overlaps with ref_df[ref_id_col]'s values.
+        Works regardless of what the column is named (_id, Customer, Sold-To Party...)."""
+        if ref_df is None or ref_id_col not in ref_df.columns:
+            return None
+        ref_ids = set(ref_df[ref_id_col].dropna().map(_norm_id))
+        if not ref_ids:
+            return None
+
+        best_col, best_ratio = None, 0.0
+        for col in rows[0].keys():
+            vals = [_norm_id(r.get(col)) for r in rows if r.get(col) not in (None, '')]
+            if not vals:
+                continue
+            matched = sum(1 for v in vals if v in ref_ids)
+            ratio = matched / len(vals)
+            if ratio > best_ratio:
+                best_ratio, best_col = ratio, col
+        return best_col if best_ratio >= min_match_ratio else None
+
+    def _enrich_with_lookup(rows, ref_collection, id_field_candidates,
+                             value_field_keywords, output_field):
+        try:
+            _load_collection(ref_collection)
+            ref_df = QVD_CACHE.get(ref_collection)
+        except Exception:
+            ref_df = None
+        if ref_df is None or not rows:
+            return
+
+        id_col = next((c for c in ref_df.columns
+                       if c.lower() in id_field_candidates), None)
+        val_col = next((c for c in ref_df.columns
+                        if any(x in c.lower() for x in value_field_keywords)), None)
+        if not id_col or not val_col:
+            return
+
+        join_col = _find_join_column(rows, ref_df, id_col)
+        if not join_col:
+            return  # no column in this result set matches this reference table's IDs
+
+        lookup = dict(zip(
+            ref_df[id_col].map(_norm_id),
+            ref_df[val_col].astype(str)
+        ))
+        for row in rows:
+            key = _norm_id(row.get(join_col))
+            if key in lookup and lookup[key] not in ('nan', 'None', ''):
+                row[output_field] = lookup[key]
+
     if raw_data and intent == "aggregate":
         try:
             parsed = json.loads(raw_data)
             if parsed and isinstance(parsed[0], dict):
-                first = parsed[0]
-
-                # ── Customer name enrichment ──────────────────────────────────
-                customer_fields = [k for k in first.keys()
-                                   if any(x in k.lower() for x in
-                                          ['sold-to', 'customer', 'party', 'kunnr'])]
-                if customer_fields:
-                    # Load KNA1 — always via QVD backend
-                    try:
-                        from mcp_server_qvd import _load_collection, QVD_CACHE
-                        _load_collection('KNA1')
-                        kna1_df = QVD_CACHE.get('KNA1')
-                    except Exception:
-                        kna1_df = None
-
-                    if kna1_df is not None:
-                        # Find the customer ID field in KNA1
-                        kna1_id_field = next(
-                            (c for c in kna1_df.columns
-                             if c.lower() in ['customer', 'kunnr', 'cust.']),
-                            None
-                        )
-                        kna1_name_field = next(
-                            (c for c in kna1_df.columns
-                             if 'name 1' in c.lower() or c == 'Name 1'),
-                            None
-                        )
-
-                        if kna1_id_field and kna1_name_field:
-                            # Build lookup dict: customer_id → name
-                            name_map = dict(zip(
-                                kna1_df[kna1_id_field].astype(str),
-                                kna1_df[kna1_name_field].astype(str)
-                            ))
-                            # Enrich each row
-                            for row in parsed:
-                                for cf in customer_fields:
-                                    cid = str(row.get(cf, ''))
-                                    if cid and cid in name_map:
-                                        row['Customer Name'] = name_map[cid]
-                                        break
-
-                # ── Material description enrichment ───────────────────────────
-                material_fields = [k for k in first.keys()
-                                   if any(x in k.lower() for x in
-                                          ['material', 'matnr', 'product'])]
-                if material_fields:
-                    try:
-                        from mcp_server_qvd import _load_collection, QVD_CACHE
-                        _load_collection('MAKT')
-                        makt_df = QVD_CACHE.get('MAKT')
-                    except Exception:
-                        makt_df = None
-
-                    if makt_df is not None:
-                        makt_id_field = next(
-                            (c for c in makt_df.columns
-                             if c.lower() in ['material', 'matnr']),
-                            None
-                        )
-                        makt_desc_field = next(
-                            (c for c in makt_df.columns
-                             if 'desc' in c.lower() or 'maktx' in c.lower()
-                             or 'material description' in c.lower()),
-                            None
-                        )
-                        if makt_id_field and makt_desc_field:
-                            desc_map = dict(zip(
-                                makt_df[makt_id_field].astype(str),
-                                makt_df[makt_desc_field].astype(str)
-                            ))
-                            for row in parsed:
-                                for mf in material_fields:
-                                    mid = str(row.get(mf, ''))
-                                    if mid and mid in desc_map:
-                                        row['Material Description'] = desc_map[mid]
-                                        break
-
+                _enrich_with_lookup(
+                    parsed, 'KNA1',
+                    id_field_candidates=['customer', 'kunnr', 'cust.'],
+                    value_field_keywords=['name 1'],
+                    output_field='Customer Name'
+                )
+                _enrich_with_lookup(
+                    parsed, 'MAKT',
+                    id_field_candidates=['material', 'matnr'],
+                    value_field_keywords=['desc', 'maktx', 'material description'],
+                    output_field='Material Description'
+                )
                 raw_data = json.dumps(parsed, indent=2, default=str)
-
         except Exception:
             pass  # enrichment is best-effort, never breaks pipeline
 
