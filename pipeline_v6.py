@@ -276,16 +276,11 @@ def node_mcp_query(state: AgentState) -> AgentState:
                                    if any(x in k.lower() for x in
                                           ['sold-to', 'customer', 'party', 'kunnr'])]
                 if customer_fields:
-                    # Load KNA1 if not cached
+                    # Load KNA1 — always via QVD backend
                     try:
-                        if USE_HF:
-                            from mcp_server_qvd import _load_collection, QVD_CACHE
-                            _load_collection('KNA1')
-                            kna1_df = QVD_CACHE.get('KNA1')
-                        else:
-                            kna1_docs = list(db['KNA1'].find({}, {'_id': 0}))
-                            import pandas as pd
-                            kna1_df = pd.DataFrame(kna1_docs)
+                        from mcp_server_qvd import _load_collection, QVD_CACHE
+                        _load_collection('KNA1')
+                        kna1_df = QVD_CACHE.get('KNA1')
                     except Exception:
                         kna1_df = None
 
@@ -322,14 +317,9 @@ def node_mcp_query(state: AgentState) -> AgentState:
                                           ['material', 'matnr', 'product'])]
                 if material_fields:
                     try:
-                        if USE_HF:
-                            from mcp_server_qvd import _load_collection, QVD_CACHE
-                            _load_collection('MAKT')
-                            makt_df = QVD_CACHE.get('MAKT')
-                        else:
-                            makt_docs = list(db['MAKT'].find({}, {'_id': 0}))
-                            import pandas as pd
-                            makt_df = pd.DataFrame(makt_docs)
+                        from mcp_server_qvd import _load_collection, QVD_CACHE
+                        _load_collection('MAKT')
+                        makt_df = QVD_CACHE.get('MAKT')
                     except Exception:
                         makt_df = None
 
