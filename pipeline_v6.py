@@ -335,6 +335,7 @@ def node_mcp_query(state: AgentState) -> AgentState:
                     output_field='Material Description'
                 )
                 raw_data = json.dumps(parsed, indent=2, default=str)
+                print("DEBUG raw_data after enrichment:", raw_data[:500])
         except Exception:
             pass  # enrichment is best-effort, never breaks pipeline
 
