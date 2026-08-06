@@ -184,24 +184,29 @@ def _apply_pipeline(df: pd.DataFrame, pipeline: list) -> list:
 
         # ── $lookup ───────────────────────────────────────────────────────────
         elif op == "$lookup":
-            spec     = stage["$lookup"]
-            from_col = spec["from"]
-            local    = spec["localField"]
-            foreign  = spec["foreignField"]
-            as_name  = spec["as"]
+            spec = stage["$lookup"]
+            as_name = spec.get("as", "_lookup_result")
 
-            if from_col in QVD_CACHE:
-                right = QVD_CACHE[from_col].copy()
-                right = right.rename(columns={foreign: local})
-                # Force matching dtypes before merge to avoid
-                # "merge on object and int64 columns" errors
-                df[local]    = df[local].astype(str)
-                right[local] = right[local].astype(str)
-                merged = df.merge(right, on=local, how="left", suffixes=("", f"_{from_col}"))
-                # Store joined rows as list in as_name column
-                df[as_name] = merged.apply(
-                    lambda r: [r.to_dict()], axis=1
-                )
+            if "localField" not in spec or "foreignField" not in spec:
+                # Unsupported advanced $lookup (let/pipeline form).
+                # Fail safely instead of crashing — leave an empty list so
+                # downstream $unwind/$group just see no matches, and the
+                # question routes to "no data" rather than erroring out.
+                df[as_name] = [[] for _ in range(len(df))]
+            else:
+                from_col = spec["from"]
+                local    = spec["localField"]
+                foreign  = spec["foreignField"]
+
+                if from_col in QVD_CACHE:
+                    right = QVD_CACHE[from_col].copy()
+                    right = right.rename(columns={foreign: local})
+                    df[local]    = df[local].astype(str)
+                    right[local] = right[local].astype(str)
+                    merged = df.merge(right, on=local, how="left", suffixes=("", f"_{from_col}"))
+                    df[as_name] = merged.apply(lambda r: [r.to_dict()], axis=1)
+                else:
+                    df[as_name] = [[] for _ in range(len(df))]
 
         # ── $unwind ───────────────────────────────────────────────────────────
         elif op == "$unwind":
@@ -445,6 +450,106 @@ def _apply_project(df: pd.DataFrame, project_spec: dict) -> pd.DataFrame:
             result[field] = spec
 
     return result
+
+
+# ─── GENERALIZED AUTO-ENRICHMENT ──────────────────────────────────────────────
+# Any collection listed here is a "master/reference" table. After ANY query
+# result comes back, every column is checked for value-overlap against each
+# reference table's ID column. On a match, the description column is attached
+# automatically — regardless of what the column is named (_id, Customer,
+# Sold-To Party...) and regardless of which question was asked.
+# Add a new master table by adding one entry here — no other code changes.
+
+REFERENCE_TABLES = [
+    {
+        "collection": "KNA1",
+        "id_field_candidates": ["customer", "kunnr", "cust."],
+        "desc_field_keywords": ["name 1"],
+        "output_field": "Customer Name",
+    },
+    {
+        "collection": "MAKT",
+        "id_field_candidates": ["material", "matnr"],
+        "desc_field_keywords": ["material description", "maktx", "desc"],
+        "output_field": "Material Description",
+    },
+    # Add more master tables here, e.g.:
+    # {"collection": "TVKO", "id_field_candidates": ["sales organization", "vkorg"],
+    #  "desc_field_keywords": ["name"], "output_field": "Sales Org Name"},
+]
+
+def _norm_id(v):
+    if isinstance(v, (list, tuple)):
+        v = v[0] if len(v) == 1 else v
+    s = str(v).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+def _find_join_column(rows, ref_df, ref_id_col, min_matches=1):
+    """Find which column in `rows` best overlaps with ref_df[ref_id_col]'s values,
+    by absolute match count — works even if the reference table only covers
+    a subset of real IDs (partial/fake master data)."""
+    if ref_df is None or ref_id_col not in ref_df.columns or not rows:
+        return None
+    ref_ids = set(ref_df[ref_id_col].dropna().map(_norm_id))
+    if not ref_ids:
+        return None
+    best_col, best_count = None, 0
+    for col in rows[0].keys():
+        vals = [_norm_id(r.get(col)) for r in rows if r.get(col) not in (None, "")]
+        if not vals:
+            continue
+        matched = sum(1 for v in vals if v in ref_ids)
+        if matched > best_count:
+            best_count, best_col = matched, col
+    return best_col if best_count >= min_matches else None
+
+def _enrich_with_lookup(rows, ref_collection, id_field_candidates,
+                         desc_field_keywords, output_field):
+    if not rows:
+        return
+    try:
+        _load_collection(ref_collection)
+        ref_df = QVD_CACHE.get(ref_collection)
+    except Exception:
+        ref_df = None
+    if ref_df is None:
+        return
+
+    id_col = next((c for c in ref_df.columns if c.lower() in id_field_candidates), None)
+    val_col = next((c for c in ref_df.columns
+                     if any(k in c.lower() for k in desc_field_keywords)), None)
+    if not id_col or not val_col:
+        return
+
+    join_col = _find_join_column(rows, ref_df, id_col)
+    if not join_col:
+        return
+
+    lookup = dict(zip(ref_df[id_col].map(_norm_id), ref_df[val_col].astype(str)))
+    for row in rows:
+        key = _norm_id(row.get(join_col))
+        if key in lookup and lookup[key] not in ("nan", "None", ""):
+            row[output_field] = lookup[key]
+
+def auto_enrich(rows):
+    """Run every registered reference-table enrichment against `rows` in place.
+    Safe to call on ANY result set from ANY question — reference tables that
+    don't match anything in this result simply add nothing."""
+    if not rows or not isinstance(rows[0], dict):
+        return rows
+    for ref in REFERENCE_TABLES:
+        try:
+            _enrich_with_lookup(
+                rows, ref["collection"],
+                ref["id_field_candidates"],
+                ref["desc_field_keywords"],
+                ref["output_field"],
+            )
+        except Exception:
+            continue  # one bad reference table should never break the others
+    return rows
 
 
 # ─── MCP TOOL DEFINITIONS ─────────────────────────────────────────────────────

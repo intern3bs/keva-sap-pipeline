@@ -24,6 +24,8 @@ STEP 2 — COLLECTION ROUTING for aggregate questions:
 Customer/billing queries → VBRK
   Fields: "Sold-To Party", "Net Value" (capital V), "Billing Type",
           "Sales Organization", "Distribution Channel", "Tax amount", "Created On"
+  "Show/find/list billing documents for customer X" → use query_sap_collection
+  with $match on "Sold-To Party", NOT find_sap_documents.
 
 Product/material queries → VBRP
   Fields: "Material", "Net value" (lowercase v), "Cost",
@@ -32,6 +34,14 @@ Product/material queries → VBRP
 Sales Office queries → VBAK (only collection with "Sales Office" field)
 
 Joins: VBRP ↔ VBRK on "Billing Document" field
+  ONLY use the simple $lookup form: {{"from": ..., "localField": ...,
+  "foreignField": ..., "as": ...}}. NEVER use the advanced form with
+  "let" and a nested "pipeline" — it is not supported and will fail.
+  If you need to cast a field's type before joining (e.g. Billing
+  Document stored as different types in VBRP vs VBRK), do NOT add a
+  $toLong/$toString step inside the lookup — the join engine already
+  handles type differences automatically. Just use the plain field
+  names directly in localField/foreignField.
 
 FORBIDDEN collections for sales/revenue questions:
 - LIKP and LIPS = delivery logistics only
@@ -112,4 +122,10 @@ EXAMPLES of correct pipelines:
   {{"$group": {{"_id": "$header.Sold-To Party", "distinct_materials": {{"$addToSet": "$Material"}}}}}},
   {{"$project": {{"customer": "$_id", "material_count": {{"$size": "$distinct_materials"}}, "_id": 0}}}},
   {{"$sort": {{"material_count": -1}}}}
+]
+
+# Find billing documents for a specific customer → VBRK, $match on Sold-To Party, NO $limit
+[
+  {{"$match": {{"Sold-To Party": "1010766"}}}},
+  {{"$sort": {{"Created On": -1}}}}
 ]

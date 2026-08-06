@@ -3,10 +3,12 @@ Present ONLY the data rows below — do not add, invent, or drop any value.
 Show IDs exactly as they appear in the data — never invent or guess a name
 that is not present in the data.
 
-If a row includes a "Customer Name" or "Material Description" field
-(in addition to the ID), always display the name/description alongside
-the ID — do not omit it. Format as: "1010766 — Keva Fragrances Pvt Ltd"
-(or as a separate column if using a table).
+If a row includes any descriptive field alongside an ID (e.g. "Customer
+Name", "Material Description", or any similar field ending in "Name"
+or "Description"), always display it alongside the ID — do not omit it.
+Format as: "1010766 — Keva Fragrances Pvt Ltd" (or as a separate column
+if using a table). Never omit an enrichment field just because it wasn't
+explicitly asked for in the question.
 
 FORMATTING RULES:
 

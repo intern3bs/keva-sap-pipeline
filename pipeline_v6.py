@@ -261,83 +261,14 @@ def node_mcp_query(state: AgentState) -> AgentState:
             messages.append({"role": "user", "content": tool_results})
             continue
         break
-# ── AUTO-ENRICHMENT (generalized, value-based join detection) ──────────────
-    def _norm_id(v):
-        if isinstance(v, (list, tuple)):
-            v = v[0] if len(v) == 1 else v
-        s = str(v).strip()
-        if s.endswith('.0'):
-            s = s[:-2]
-        return s
-
-    def _find_join_column(rows, ref_df, ref_id_col, min_matches=1):
-        """Find which column in `rows` best overlaps with ref_df[ref_id_col]'s values.
-        Uses absolute match count, not ratio — works even when the reference
-        table only covers a subset of real IDs (e.g. a partial/fake KNA1)."""
-        if ref_df is None or ref_id_col not in ref_df.columns:
-            return None
-        ref_ids = set(ref_df[ref_id_col].dropna().map(_norm_id))
-        if not ref_ids:
-            return None
-
-        best_col, best_count = None, 0
-        for col in rows[0].keys():
-            vals = [_norm_id(r.get(col)) for r in rows if r.get(col) not in (None, '')]
-            if not vals:
-                continue
-            matched = sum(1 for v in vals if v in ref_ids)
-            if matched > best_count:
-                best_count, best_col = matched, col
-        return best_col if best_count >= min_matches else None
-
-    def _enrich_with_lookup(rows, ref_collection, id_field_candidates,
-                             value_field_keywords, output_field):
-        try:
-            _load_collection(ref_collection)
-            ref_df = QVD_CACHE.get(ref_collection)
-        except Exception:
-            ref_df = None
-        if ref_df is None or not rows:
-            return
-
-        id_col = next((c for c in ref_df.columns
-                       if c.lower() in id_field_candidates), None)
-        val_col = next((c for c in ref_df.columns
-                        if any(x in c.lower() for x in value_field_keywords)), None)
-        if not id_col or not val_col:
-            return
-
-        join_col = _find_join_column(rows, ref_df, id_col)
-        if not join_col:
-            return  # no column in this result set matches this reference table's IDs
-
-        lookup = dict(zip(
-            ref_df[id_col].map(_norm_id),
-            ref_df[val_col].astype(str)
-        ))
-        for row in rows:
-            key = _norm_id(row.get(join_col))
-            if key in lookup and lookup[key] not in ('nan', 'None', ''):
-                row[output_field] = lookup[key]
-
+# ── AUTO-ENRICHMENT (generalized — see mcp_server_qvd.auto_enrich) ────────
     if raw_data and intent == "aggregate":
         try:
             parsed = json.loads(raw_data)
             if parsed and isinstance(parsed[0], dict):
-                _enrich_with_lookup(
-                    parsed, 'KNA1',
-                    id_field_candidates=['customer', 'kunnr', 'cust.'],
-                    value_field_keywords=['name 1'],
-                    output_field='Customer Name'
-                )
-                _enrich_with_lookup(
-                    parsed, 'MAKT',
-                    id_field_candidates=['material', 'matnr'],
-                    value_field_keywords=['desc', 'maktx', 'material description'],
-                    output_field='Material Description'
-                )
+                from mcp_server_qvd import auto_enrich
+                auto_enrich(parsed)
                 raw_data = json.dumps(parsed, indent=2, default=str)
-                print("DEBUG raw_data after enrichment:", raw_data[:500])
         except Exception:
             pass  # enrichment is best-effort, never breaks pipeline
 
