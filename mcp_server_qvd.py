@@ -193,6 +193,10 @@ def _apply_pipeline(df: pd.DataFrame, pipeline: list) -> list:
             if from_col in QVD_CACHE:
                 right = QVD_CACHE[from_col].copy()
                 right = right.rename(columns={foreign: local})
+                # Force matching dtypes before merge to avoid
+                # "merge on object and int64 columns" errors
+                df[local]    = df[local].astype(str)
+                right[local] = right[local].astype(str)
                 merged = df.merge(right, on=local, how="left", suffixes=("", f"_{from_col}"))
                 # Store joined rows as list in as_name column
                 df[as_name] = merged.apply(
@@ -216,30 +220,30 @@ def _apply_match(df: pd.DataFrame, match: dict) -> pd.DataFrame:
         if field not in df.columns:
             continue
 
-        col = df[field]
+        col_str = df[field].astype(str)  # normalized for exact-match ops
 
         if isinstance(condition, dict):
             for op, val in condition.items():
                 if op == "$gt":
-                    mask &= pd.to_numeric(col, errors="coerce") > float(val)
+                    mask &= pd.to_numeric(df[field], errors="coerce") > float(val)
                 elif op == "$gte":
-                    mask &= pd.to_numeric(col, errors="coerce") >= float(val)
+                    mask &= pd.to_numeric(df[field], errors="coerce") >= float(val)
                 elif op == "$lt":
-                    mask &= pd.to_numeric(col, errors="coerce") < float(val)
+                    mask &= pd.to_numeric(df[field], errors="coerce") < float(val)
                 elif op == "$lte":
-                    mask &= pd.to_numeric(col, errors="coerce") <= float(val)
+                    mask &= pd.to_numeric(df[field], errors="coerce") <= float(val)
                 elif op == "$eq":
-                    mask &= col == str(val)
+                    mask &= col_str == str(val)
                 elif op == "$ne":
-                    mask &= col != str(val)
+                    mask &= col_str != str(val)
                 elif op == "$in":
-                    mask &= col.isin([str(v) for v in val])
+                    mask &= col_str.isin([str(v) for v in val])
                 elif op == "$nin":
-                    mask &= ~col.isin([str(v) for v in val])
+                    mask &= ~col_str.isin([str(v) for v in val])
                 elif op == "$exists":
-                    mask &= col.notna() if val else col.isna()
+                    mask &= df[field].notna() if val else df[field].isna()
         else:
-            mask &= col == str(condition)
+            mask &= col_str == str(condition)
 
     return df[mask].reset_index(drop=True)
 
