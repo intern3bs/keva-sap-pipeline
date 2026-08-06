@@ -252,11 +252,29 @@ def _eval_expr(df: pd.DataFrame, expr):
     """Evaluate a MongoDB expression and return a Series."""
     if isinstance(expr, str) and expr.startswith("$"):
         field = expr[1:]
-        return pd.to_numeric(df.get(field, pd.Series([None]*len(df))), errors="coerce")
+        if "." in field:
+            base_field, nested_path = field.split(".", 1)
+            base_series = df.get(base_field, pd.Series([None] * len(df)))
+            keys = nested_path.split(".")
+            def _dig(v):
+                cur = v
+                for k in keys:
+                    if isinstance(cur, dict):
+                        cur = cur.get(k)
+                    else:
+                        return None
+                return cur
+            return base_series.apply(_dig)
+        # Return raw values — numeric coercion happens at call sites
+        # that need it ($sum/$avg/etc already re-coerce in _apply_group).
+        return df.get(field, pd.Series([None] * len(df)))
 
     if isinstance(expr, dict):
         op = list(expr.keys())[0]
         args = expr[op]
+
+        if op == "$toLong":
+            return pd.to_numeric(_eval_expr(df, args), errors="coerce").astype("Int64")
 
         if op == "$sum":
             if args == 1:
