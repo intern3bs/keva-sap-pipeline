@@ -143,11 +143,13 @@ vectordb = Chroma(
 # ─── ANTHROPIC CLIENT ─────────────────────────────────────────────────────────
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
-print(f"  Model 1 (query gen) : Claude API ({CLAUDE_MODEL}) via MCP tools")
+model1_status = f"HuggingFace {LLM_MODEL_2 if 'LLM_MODEL_2' in dir() else model2_name} [GPU, local]" if USE_LOCAL_MODEL1 else f"Claude API ({CLAUDE_MODEL}) via MCP tools"
+print(f"  Model 1 (query gen) : {model1_status}")
 print(f"  Model 2 (format)    : {model2_name} [local — sees data]")
 print(f"  Embeddings          : {embed_name}")
-print(f"  Database            : MongoDB Atlas — {DB_NAME}")
-print(f"  MCP Tools           : {len(MCP_TOOLS)} tools from mcp_server.py")
+print(f"  Database            : QVD backend — {QVD_DIR if 'QVD_DIR' in dir() else DB_NAME}")
+print(f"  MCP Tools           : {len(MCP_TOOLS)} tools")
+print(f"  Model 1 routing     : {'node_mcp_query_local' if USE_LOCAL_MODEL1 else 'node_mcp_query_claude'} (USE_HF_MODEL1={USE_LOCAL_MODEL1})")
 
 # ─── SCHEMA SUMMARY ───────────────────────────────────────────────────────────
 def build_schema_summary() -> str:
