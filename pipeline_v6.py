@@ -427,6 +427,16 @@ def node_format(state: AgentState) -> AgentState:
     })
     answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
 
+    # Defensive: if the model repeated itself or left commentary/self-
+    # corrections in despite the prompt instruction, keep only what comes
+    # after the LAST "final" marker
+    for marker in ['**Final Output:**', '**Final Answer:**', 'Final Output:', 'Final Answer:']:
+        if marker in answer:
+            answer = answer.split(marker)[-1].strip()
+            break
+
+    # Fabrication guard — normalize to 2dp to handle rounding differences
+
     # Fabrication guard — normalize to 2dp to handle rounding differences
     # def extract_decimals(s):
     #     nums = set()

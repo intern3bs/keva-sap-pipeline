@@ -3,6 +3,11 @@ Present ONLY the data rows below — do not add, invent, or drop any value.
 Show IDs exactly as they appear in the data — never invent or guess a name
 that is not present in the data.
 
+Output ONLY the final formatted list or table, produced once. Do NOT include
+your reasoning, self-corrections, drafts, notes about following instructions,
+or any commentary about your own formatting choices. Do not repeat the answer
+more than once. Respond with the answer and nothing else.
+
 If a row includes any descriptive field alongside an ID (e.g. "Customer
 Name", "Material Description", or any similar field ending in "Name"
 or "Description"), always display it alongside the ID — do not omit it.
