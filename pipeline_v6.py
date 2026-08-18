@@ -52,6 +52,7 @@ from langgraph.graph.message import add_messages
 
 # ─── IMPORTS FROM SIBLING FILES ───────────────────────────────────────────────
 from mcp_server_qvd import execute_tool, MCP_TOOLS, SCHEMA_CACHE, db, _load_collection, QVD_CACHE
+from masking import mask_question, summarize_for_model1
 from prompts import (
     MCP_SYSTEM_PROMPT,
     ABAP_PROMPT,
@@ -164,7 +165,9 @@ SYSTEM_PROMPT = MCP_SYSTEM_PROMPT.format(
 
 # ─── STATE ────────────────────────────────────────────────────────────────────
 class AgentState(TypedDict):
-    question:      str
+    question:        str
+    masked_question:  str        # question with identifying values replaced by tokens
+    mask_map:         object     # MaskMap — per-request, local-only, unmask lookup
     raw_data:      str          # raw JSON from MongoDB — goes to Model 2, not Claude
     used_pipeline: dict         # pipeline params for display
     tool_calls:    list         # list of MCP tools called
@@ -182,7 +185,8 @@ class AgentState(TypedDict):
 # ══════════════════════════════════════════════════════════════════════════════
 def node_mcp_query(state: AgentState) -> AgentState:
     question        = state["question"]
-    messages        = [{"role": "user", "content": question}]
+    masked_question, mask_map = mask_question(question)
+    messages        = [{"role": "user", "content": masked_question}]
     tool_calls_made = []
     raw_data        = ""
     used_pipeline   = {}
@@ -212,8 +216,11 @@ def node_mcp_query(state: AgentState) -> AgentState:
                 tool_input     = block.input
                 tool_calls_made.append(tool_name)
 
+                # Unmask locally before hitting the real data — Claude only ever saw the token
+                real_tool_input = mask_map.unmask_json(tool_input)
+
                 # Execute via mcp_server — no Python code generation
-                tool_result = execute_tool(tool_name, tool_input)
+                tool_result = execute_tool(tool_name, real_tool_input)
 
                 # Capture raw data from query — goes to Model 2, NOT back to Claude
                 if tool_name == "query_sap_collection":
@@ -237,13 +244,19 @@ def node_mcp_query(state: AgentState) -> AgentState:
                             else:
                                 exec_status   = "data"
                                 raw_data      = tool_result
-                                used_pipeline = tool_input
+                                used_pipeline = real_tool_input
                                 intent        = "aggregate"
                     except Exception:
                         exec_status   = "data"
                         raw_data      = tool_result
-                        used_pipeline = tool_input
+                        used_pipeline = real_tool_input
                         intent        = "aggregate"
+
+                # What Claude sees back — never the real rows for data-bearing tools
+                if tool_name in ("query_sap_collection", "find_sap_documents"):
+                    echo = summarize_for_model1(tool_result)
+                else:
+                    echo = tool_result  # schema/list/cache_status — no row data, safe as-is
 
                 assistant_content.append({
                     "type": "tool_use", "id": block.id,
@@ -252,7 +265,7 @@ def node_mcp_query(state: AgentState) -> AgentState:
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
-                    "content": tool_result
+                    "content": echo
                 })
 
         messages.append({"role": "assistant", "content": assistant_content})
@@ -279,6 +292,8 @@ def node_mcp_query(state: AgentState) -> AgentState:
 
     return {
         **state,
+        "masked_question": masked_question,
+        "mask_map":        mask_map,
         "raw_data":      raw_data,
         "used_pipeline": used_pipeline,
         "tool_calls":    tool_calls_made,
@@ -370,22 +385,17 @@ def node_rag_search(state: AgentState) -> AgentState:
     fused   = rrf([vec, txt])[:10]
     context = "\n\n---\n\n".join(r["text"] for r in fused)
 
-    # Model 2 formats semantic answer
-    # Claude formats semantic answers — prevents hallucination of names/data
-    sem_response = anthropic_client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=512,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Answer using ONLY the SAP records below. "
-                f"If the answer is not in the records, say so honestly.\n\n"
-                f"SAP Records:\n{context[:2000]}\n\n"
-                f"Question: {question}\nAnswer:"
-            )
-        }]
+    # Model 2 (local Answer Generator) formats the semantic answer — real
+    # records never go to Claude for this path either
+    prompt = PromptTemplate(
+        template=SEMANTIC_FORMAT_PROMPT,
+        input_variables=["context", "question"]
     )
-    answer = sem_response.content[0].text.strip()
+    answer = (prompt | llm_2 | StrOutputParser()).invoke({
+        "context":  context[:2000],
+        "question": question
+    })
+    answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
     if not answer:
         answer = context
 
@@ -420,22 +430,23 @@ def node_assemble(state: AgentState) -> AgentState:
     else:
         pipeline_display = "No aggregation — semantic answer via RAG"
 
-    # Generate ABAP query via Model 2 (documentation only)
-    # Claude generates ABAP — Model 2 hallucinates garbage ABAP
+    # Generate ABAP query via Model 1 (Claude) — using the MASKED question,
+    # so any identifying value the user typed never reaches this call either
+    mask_map = state["mask_map"]
     abap_response = anthropic_client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=512,
         messages=[{
             "role": "user",
             "content": (
-                f"Generate a concise SAP ABAP SELECT query for:\n{state['question']}\n\n"
+                f"Generate a concise SAP ABAP SELECT query for:\n{state['masked_question']}\n\n"
                 f"Use tables: VBAK, VBAP, VBRK, VBRP, KNA1, MARA, MAKT, LIKP, LIPS\n"
                 f"Format: REPORT z_sap_query. SELECT ... INTO TABLE @DATA(lt_result)\n"
                 f"Return ONLY the ABAP code."
             )
         }]
     )
-    abap_query = abap_response.content[0].text.strip()
+    abap_query = mask_map.unmask(abap_response.content[0].text.strip())
 
     tools_used = " -> ".join(tool_calls) if tool_calls else "RAG search"
     final = (
@@ -475,7 +486,9 @@ agent = build_agent()
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 def query_sap(question: str, verbose: bool = False) -> str:
     result = agent.invoke({
-        "question":      question,
+        "question":        question,
+        "masked_question": "",
+        "mask_map":        None,
         "raw_data":      "",
         "used_pipeline": {},
         "tool_calls":    [],
