@@ -71,7 +71,8 @@ TEMPERATURE   = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 CLAUDE_MODEL  = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
 USE_HF        = os.getenv("USE_HF_MODEL2", "false").lower() == "true"
-USE_CLAUDE    = True  # v6 always uses Claude as Model 1
+USE_LOCAL_MODEL1 = os.getenv("USE_HF_MODEL1", "false").lower() == "true"
+USE_CLAUDE    = not USE_LOCAL_MODEL1  # Model 1 is Claude unless running fully local
 
 # ─── MODEL 2 — HuggingFace (GPU) or Ollama (CPU) ─────────────────────────────
 if USE_HF:
@@ -183,7 +184,108 @@ class AgentState(TypedDict):
 # Claude calls MCP tools to get raw data
 # Claude sees: schema + question only — NEVER sees actual SAP data
 # ══════════════════════════════════════════════════════════════════════════════
+def _extract_json(text: str):
+    """Best-effort JSON extraction from local-model output, which often
+    wraps JSON in markdown fences or adds stray commentary."""
+    text = text.strip()
+    text = re.sub(r'^```(?:json)?', '', text)
+    text = re.sub(r'```$', '', text)
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            return None
+    return None
+
+
+def node_mcp_query_local(state: AgentState) -> AgentState:
+    """Model 1 running fully locally (reuses the loaded llm_2 model) —
+    single-shot pipeline generation instead of Claude's interactive
+    tool-calling loop. Requires USE_HF_MODEL2=true so llm_2 is actually
+    the local model, not Claude Haiku or Ollama."""
+    from mcp_server_qvd import auto_enrich
+    question = state["question"]
+    masked_question, mask_map = mask_question(question)
+
+    local_instructions = (
+        "\n\nIMPORTANT — OUTPUT FORMAT (read carefully):\n"
+        "You do not have access to interactive tool calls right now. Respond with EXACTLY ONE "
+        "JSON object, and nothing else — no explanation, no markdown fences, no extra text.\n\n"
+        "If the question can be answered with a structured query, respond with:\n"
+        '{"intent": "aggregate", "collection": "<VBRK|VBRP|VBAK|VBAP|KNA1|MARA|MAKT>", "pipeline": [ ... ]}\n\n'
+        "If the question cannot be answered from structured data, respond with:\n"
+        '{"intent": "semantic"}\n\n'
+        f"Question: {masked_question}\nJSON:"
+    )
+    full_prompt = SYSTEM_PROMPT + local_instructions
+
+    raw_data, used_pipeline, intent, exec_status, tool_calls_made = "", {}, "semantic", "empty", []
+
+    try:
+        response_text = llm_2.invoke(full_prompt)
+        if hasattr(response_text, "content"):
+            response_text = response_text.content
+        parsed = _extract_json(str(response_text))
+    except Exception:
+        parsed = None
+
+    if parsed and parsed.get("intent") == "aggregate" and parsed.get("collection") and parsed.get("pipeline"):
+        real_pipeline = mask_map.unmask_json(parsed["pipeline"])
+        tool_input = {"collection": parsed["collection"], "pipeline": real_pipeline, "limit": 100}
+        tool_result = execute_tool("query_sap_collection", tool_input)
+        tool_calls_made.append("query_sap_collection")
+
+        try:
+            rows = json.loads(tool_result)
+            if not rows:
+                exec_status, raw_data, intent = "empty", "", "semantic"
+            else:
+                first = rows[0] if rows else {}
+                all_null = all(v is None or v == "" or str(v) == "None"
+                                for k, v in first.items() if k not in ["_id"])
+                if all_null:
+                    exec_status, raw_data, intent = "empty", "", "semantic"
+                else:
+                    exec_status, raw_data = "data", tool_result
+                    used_pipeline, intent = tool_input, "aggregate"
+        except Exception:
+            exec_status, raw_data = "data", tool_result
+            used_pipeline, intent = tool_input, "aggregate"
+
+        if raw_data and intent == "aggregate":
+            try:
+                parsed_rows = json.loads(raw_data)
+                if parsed_rows and isinstance(parsed_rows[0], dict):
+                    auto_enrich(parsed_rows)
+                    raw_data = json.dumps(parsed_rows, indent=2, default=str)
+            except Exception:
+                pass
+
+    if not raw_data:
+        intent, exec_status = "semantic", "empty"
+
+    return {
+        **state,
+        "masked_question": masked_question, "mask_map": mask_map,
+        "raw_data": raw_data, "used_pipeline": used_pipeline,
+        "tool_calls": tool_calls_made, "intent": intent, "exec_status": exec_status,
+        "messages": [HumanMessage(content=question)]
+    }
+
+
 def node_mcp_query(state: AgentState) -> AgentState:
+    if USE_LOCAL_MODEL1:
+        return node_mcp_query_local(state)
+    return node_mcp_query_claude(state)
+
+
+def node_mcp_query_claude(state: AgentState) -> AgentState:
     question        = state["question"]
     masked_question, mask_map = mask_question(question)
     messages        = [{"role": "user", "content": masked_question}]
@@ -433,20 +535,26 @@ def node_assemble(state: AgentState) -> AgentState:
     # Generate ABAP query via Model 1 (Claude) — using the MASKED question,
     # so any identifying value the user typed never reaches this call either
     mask_map = state["mask_map"]
-    abap_response = anthropic_client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=512,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Generate a concise SAP ABAP SELECT query for:\n{state['masked_question']}\n\n"
-                f"Use tables: VBAK, VBAP, VBRK, VBRP, KNA1, MARA, MAKT, LIKP, LIPS\n"
-                f"Format: REPORT z_sap_query. SELECT ... INTO TABLE @DATA(lt_result)\n"
-                f"Return ONLY the ABAP code."
-            )
-        }]
+    abap_instruction = (
+        f"Generate a concise SAP ABAP SELECT query for:\n{state['masked_question']}\n\n"
+        f"Use tables: VBAK, VBAP, VBRK, VBRP, KNA1, MARA, MAKT, LIKP, LIPS\n"
+        f"Format: REPORT z_sap_query. SELECT ... INTO TABLE @DATA(lt_result)\n"
+        f"Return ONLY the ABAP code."
     )
-    abap_query = mask_map.unmask(abap_response.content[0].text.strip())
+    if USE_LOCAL_MODEL1:
+        try:
+            raw_abap = llm_2.invoke(abap_instruction)
+            if hasattr(raw_abap, "content"):
+                raw_abap = raw_abap.content
+            abap_query = mask_map.unmask(str(raw_abap).strip())
+        except Exception:
+            abap_query = "-- ABAP generation unavailable in local-only mode --"
+    else:
+        abap_response = anthropic_client.messages.create(
+            model=CLAUDE_MODEL, max_tokens=512,
+            messages=[{"role": "user", "content": abap_instruction}]
+        )
+        abap_query = mask_map.unmask(abap_response.content[0].text.strip())
 
     tools_used = " -> ".join(tool_calls) if tool_calls else "RAG search"
     final = (
